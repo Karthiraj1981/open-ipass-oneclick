@@ -1,0 +1,53 @@
+#cloud-config
+package_update: true
+package_upgrade: false
+
+packages:
+  - apt-transport-https
+  - ca-certificates
+  - curl
+  - gnupg
+  - lsb-release
+  - jq
+
+write_files:
+  - path: /etc/sysctl.d/99-ipass.conf
+    content: |
+      net.core.somaxconn = 1024
+      vm.max_map_count = 262144
+    owner: root:root
+    permissions: '0644'
+
+runcmd:
+  # Install Docker (engine) + Compose v2 plugin on Ubuntu 22.04 (Jammy)
+  - bash -lc 'install -m 0755 -d /etc/apt/keyrings'
+  - bash -lc 'curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg --dearmor -o /etc/apt/keyrings/docker.gpg'
+  - bash -lc 'chmod a+r /etc/apt/keyrings/docker.gpg'
+  - bash -lc 'echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu jammy stable" > /etc/apt/sources.list.d/docker.list'
+  - bash -lc 'apt-get update -y'
+  - bash -lc 'apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin'
+  - systemctl enable docker
+  - systemctl start docker
+  - usermod -aG docker ubuntu || true
+
+  # Prepare folder
+  - mkdir -p /opt/ipass
+  - cd /opt/ipass
+
+  # Get Public IP from IMDS
+  - bash -lc 'PUB_IP=$(curl -s http://169.254.169.254/latest/meta-data/public-ipv4) && echo $PUB_IP > /opt/ipass/.public_ip'
+
+  # Fetch docker-compose.yaml from your repo
+  - bash -lc 'curl -fsSL https://raw.githubusercontent.com/Karthiraj1981/open-ipass-oneclick/main/docker-compose.yaml -o /opt/ipass/docker-compose.yaml'
+
+  # Replace PUBLIC_IP placeholder
+  - bash -lc 'PUB_IP=$(cat /opt/ipass/.public_ip) && sed -i "s/PUBLIC_IP/$PUB_IP/g" /opt/ipass/docker-compose.yaml'
+
+  # Increase vm.max_map_count (needed by some systems; safe default)
+  - sysctl --system
+
+  # Start stack
+  - bash -lc 'docker compose -f /opt/ipass/docker-compose.yaml up -d'
+
+  # Show running containers (in cloud-init output)
+  - bash -lc 'docker ps'
