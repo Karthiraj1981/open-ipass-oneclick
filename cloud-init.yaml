@@ -10,21 +10,21 @@ packages:
   - jq
 
 write_files:
-  - path: /opt/ipass/init.sh
+  - path: /opt/ipaas/init.sh
     permissions: '0755'
     content: |
       #!/bin/bash
       set -e
 
-      LOG_FILE="/var/log/ipass-init.log"
+      LOG_FILE="/var/log/ipaas-init.log"
       echo "===== Starting iPaaS cloud-init =====" | tee -a $LOG_FILE
 
       # Ensure docker service is running
       systemctl enable docker >> $LOG_FILE 2>&1
       systemctl start docker  >> $LOG_FILE 2>&1
 
-      mkdir -p /opt/ipass
-      cd /opt/ipass
+      mkdir -p /opt/ipaas
+      cd /opt/ipaas
 
       echo "[1] Fetching docker-compose.yaml from GitHub..." | tee -a $LOG_FILE
       curl -fsSL https://raw.githubusercontent.com/Karthiraj1981/open-ipass-oneclick/main/docker-compose.yaml \
@@ -61,4 +61,4 @@ write_files:
 
 
 runcmd:
-  - [ bash, /opt/ipass/init.sh ]
+  - [ bash, /opt/ipaas/init.sh ]
