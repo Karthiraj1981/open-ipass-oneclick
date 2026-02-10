@@ -10,20 +10,19 @@ volumes:
   nifi_data:
 
 services:
-
   # -------------------------------------------------------
-  # Apache ActiveMQ Artemis (Official Apache image)
+  # Apache ActiveMQ Artemis
   # -------------------------------------------------------
   artemis:
-    image: apache/activemq-artemis:latest
+    image: apache/activemq-artemis:latest   # consider pinning a version
     container_name: artemis
     restart: unless-stopped
     environment:
       ARTEMIS_USER: admin
       ARTEMIS_PASSWORD: admin
     ports:
-      - "8161:8161"     # Web console
-      - "61616:61616"   # AMQP / CORE / OpenWire
+      - "8161:8161"   # Web console
+      - "61616:61616" # AMQP / CORE / OpenWire
     networks: [ipaas]
     volumes:
       - artemis_data:/var/lib/artemis-instance
@@ -34,10 +33,10 @@ services:
       retries: 20
 
   # -------------------------------------------------------
-  # Apache Kafka (KRaft mode, NO ZooKeeper)
+  # Apache Kafka (KRaft mode, no ZooKeeper)
   # -------------------------------------------------------
   kafka:
-    image: apache/kafka:3.7.2
+    image: apache/kafka:3.7.2                # consider pinning; OK to keep
     container_name: kafka
     restart: unless-stopped
     ports:
@@ -64,10 +63,10 @@ services:
       retries: 20
 
   # -------------------------------------------------------
-  # Apache NiFi (Official Apache image)
+  # Apache NiFi
   # -------------------------------------------------------
   nifi:
-    image: apache/nifi:latest
+    image: apache/nifi:latest                # consider pinning a version
     container_name: nifi
     restart: unless-stopped
     environment:
@@ -86,17 +85,17 @@ services:
       - nifi_data:/opt/nifi/nifi-current
 
   # -------------------------------------------------------
-  # Apache EventMesh (Official Apache image)
+  # Apache EventMesh
   # -------------------------------------------------------
   eventmesh:
-    image: apache/eventmesh:latest
+    image: apache/eventmesh:latest           # consider pinning a version
     container_name: eventmesh
     restart: unless-stopped
     ports:
-      - "10105:10105"   # HTTP
-      - "10000:10000"   # TCP
-      - "10205:10205"   # gRPC
-      - "10106:10106"   # Admin
+      - "10105:10105" # HTTP
+      - "10000:10000" # TCP
+      - "10205:10205" # gRPC
+      - "10106:10106" # Admin
     networks: [ipaas]
     depends_on:
       kafka:
