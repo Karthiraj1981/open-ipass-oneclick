@@ -79,7 +79,7 @@ services:
     networks: [ipaas]
     depends_on:
       kafka:
-        condition: service_healthy
+        condition: service_started
       artemis:
         condition: service_started
     volumes:
@@ -100,7 +100,7 @@ services:
     networks: [ipaas]
     depends_on:
       kafka:
-        condition: service_healthy
+        condition: service_started
     healthcheck:
       test: ["CMD-SHELL", "curl -fsS http://localhost:10105 || exit 1"]
       interval: 20s
