@@ -1,53 +1,64 @@
 #cloud-config
 package_update: true
-package_upgrade: false
+package_upgrade: all
 
 packages:
-  - apt-transport-https
-  - ca-certificates
+  - docker.io
+  - docker-compose-plugin
+  - git
   - curl
-  - gnupg
-  - lsb-release
   - jq
 
 write_files:
-  - path: /etc/sysctl.d/99-ipass.conf
+  - path: /opt/ipass/init.sh
+    permissions: '0755'
     content: |
-      net.core.somaxconn = 1024
-      vm.max_map_count = 262144
-    owner: root:root
-    permissions: '0644'
+      #!/bin/bash
+      set -e
+
+      LOG_FILE="/var/log/ipass-init.log"
+      echo "===== Starting iPaaS cloud-init =====" | tee -a $LOG_FILE
+
+      # Ensure docker service is running
+      systemctl enable docker >> $LOG_FILE 2>&1
+      systemctl start docker  >> $LOG_FILE 2>&1
+
+      mkdir -p /opt/ipass
+      cd /opt/ipass
+
+      echo "[1] Fetching docker-compose.yaml from GitHub..." | tee -a $LOG_FILE
+      curl -fsSL https://raw.githubusercontent.com/Karthiraj1981/open-ipass-oneclick/main/docker-compose.yaml \
+        -o docker-compose.yaml
+
+      if [[ ! -f docker-compose.yaml ]]; then
+        echo "ERROR: Failed to download docker-compose.yaml" | tee -a $LOG_FILE
+        exit 1
+      fi
+
+      echo "[2] Detecting PUBLIC IP..." | tee -a $LOG_FILE
+      PUBLIC_IP=$(curl -s http://169.254.169.254/latest/meta-data/public-ipv4)
+
+      if [[ -z "$PUBLIC_IP" ]]; then
+        echo "ERROR: Could not detect public IP!" | tee -a $LOG_FILE
+        exit 1
+      fi
+
+      echo "   → Public IP = $PUBLIC_IP" | tee -a $LOG_FILE
+
+      # Replace PUBLIC_IP placeholder
+      sed -i "s/PUBLIC_IP/$PUBLIC_IP/g" docker-compose.yaml
+
+      echo "[3] Cleaning up old containers..." | tee -a $LOG_FILE
+      docker compose down --remove-orphans >> $LOG_FILE 2>&1 || true
+
+      echo "[4] Pulling images..." | tee -a $LOG_FILE
+      docker compose pull >> $LOG_FILE 2>&1
+
+      echo "[5] Starting Apache iPaaS stack..." | tee -a $LOG_FILE
+      docker compose up -d >> $LOG_FILE 2>&1
+
+      echo "===== Done iPaaS cloud-init =====" | tee -a $LOG_FILE
+
 
 runcmd:
-  # Install Docker (engine) + Compose v2 plugin on Ubuntu 22.04 (Jammy)
-  - bash -lc 'install -m 0755 -d /etc/apt/keyrings'
-  - bash -lc 'curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg --dearmor -o /etc/apt/keyrings/docker.gpg'
-  - bash -lc 'chmod a+r /etc/apt/keyrings/docker.gpg'
-  - bash -lc 'echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu jammy stable" > /etc/apt/sources.list.d/docker.list'
-  - bash -lc 'apt-get update -y'
-  - bash -lc 'apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin'
-  - systemctl enable docker
-  - systemctl start docker
-  - usermod -aG docker ubuntu || true
-
-  # Prepare folder
-  - mkdir -p /opt/ipass
-  - cd /opt/ipass
-
-  # Get Public IP from IMDS
-  - bash -lc 'PUB_IP=$(curl -s http://169.254.169.254/latest/meta-data/public-ipv4) && echo $PUB_IP > /opt/ipass/.public_ip'
-
-  # Fetch docker-compose.yaml from your repo
-  - bash -lc 'curl -fsSL https://raw.githubusercontent.com/Karthiraj1981/open-ipass-oneclick/main/docker-compose.yaml -o /opt/ipass/docker-compose.yaml'
-
-  # Replace PUBLIC_IP placeholder
-  - bash -lc 'PUB_IP=$(cat /opt/ipass/.public_ip) && sed -i "s/PUBLIC_IP/$PUB_IP/g" /opt/ipass/docker-compose.yaml'
-
-  # Increase vm.max_map_count (needed by some systems; safe default)
-  - sysctl --system
-
-  # Start stack
-  - bash -lc 'docker compose -f /opt/ipass/docker-compose.yaml up -d'
-
-  # Show running containers (in cloud-init output)
-  - bash -lc 'docker ps'
+  - [ bash, /opt/ipass/init.sh ]
