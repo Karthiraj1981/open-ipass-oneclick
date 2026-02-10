@@ -6,8 +6,8 @@ set -euo pipefail
 ###############################################################################
 REGION="ap-northeast-1"
 INSTANCE_TYPE="t3.medium"
-KEY_NAME="ipass-dev-key"
-TAG_NAME="open-ipass-ec2"
+KEY_NAME="ipaas-dev-key"
+TAG_NAME="open-ipaas-ec2"
 USER_DATA_URL="https://raw.githubusercontent.com/Karthiraj1981/open-ipass-oneclick/main/cloud-init.yaml"
 
 echo "🌏 Region: $REGION"
@@ -43,10 +43,10 @@ fi
 ###############################################################################
 # 1. REUSE OR CREATE VPC
 ###############################################################################
-echo "🔍 Checking VPC 'open-ipass-vpc'..."
+echo "🔍 Checking VPC 'open-ipaas-vpc'..."
 VPC_ID=$(aws ec2 describe-vpcs \
   --region "$REGION" \
-  --filters "Name=tag:Name,Values=open-ipass-vpc" \
+  --filters "Name=tag:Name,Values=open-ipaas-vpc" \
   --query 'Vpcs[0].VpcId' \
   --output text 2>/dev/null || true)
 
@@ -57,7 +57,7 @@ if [[ -z "$VPC_ID" || "$VPC_ID" == "None" ]]; then
     --region "$REGION" \
     --query 'Vpc.VpcId' \
     --output text)
-  aws ec2 create-tags --region "$REGION" --resources "$VPC_ID" --tags Key=Name,Value=open-ipass-vpc
+  aws ec2 create-tags --region "$REGION" --resources "$VPC_ID" --tags Key=Name,Value=open-ipaas-vpc
 else
   echo "✔ Reusing VPC: $VPC_ID"
 fi
@@ -68,10 +68,10 @@ aws ec2 modify-vpc-attribute --region "$REGION" --vpc-id "$VPC_ID" --enable-dns-
 ###############################################################################
 # 2. REUSE OR CREATE SUBNET
 ###############################################################################
-echo "🔍 Checking Subnet 'open-ipass-subnet'..."
+echo "🔍 Checking Subnet 'open-ipaas-subnet'..."
 SUBNET_ID=$(aws ec2 describe-subnets \
   --region "$REGION" \
-  --filters "Name=tag:Name,Values=open-ipass-subnet" \
+  --filters "Name=tag:Name,Values=open-ipaas-subnet" \
   --query 'Subnets[0].SubnetId' \
   --output text 2>/dev/null || true)
 
@@ -84,7 +84,7 @@ if [[ -z "$SUBNET_ID" || "$SUBNET_ID" == "None" ]]; then
     --region "$REGION" \
     --query 'Subnet.SubnetId' \
     --output text)
-  aws ec2 create-tags --region "$REGION" --resources "$SUBNET_ID" --tags Key=Name,Value=open-ipass-subnet
+  aws ec2 create-tags --region "$REGION" --resources "$SUBNET_ID" --tags Key=Name,Value=open-ipaas-subnet
 else
   echo "✔ Reusing Subnet: $SUBNET_ID"
 fi
@@ -94,10 +94,10 @@ aws ec2 modify-subnet-attribute --region "$REGION" --subnet-id "$SUBNET_ID" --ma
 ###############################################################################
 # 3. REUSE OR CREATE IGW + ROUTE TABLE
 ###############################################################################
-echo "🔍 Checking Internet Gateway 'open-ipass-igw'..."
+echo "🔍 Checking Internet Gateway 'open-ipaas-igw'..."
 IGW_ID=$(aws ec2 describe-internet-gateways \
   --region "$REGION" \
-  --filters "Name=tag:Name,Values=open-ipass-igw" \
+  --filters "Name=tag:Name,Values=open-ipaas-igw" \
   --query 'InternetGateways[0].InternetGatewayId' \
   --output text 2>/dev/null || true)
 
@@ -107,16 +107,16 @@ if [[ -z "$IGW_ID" || "$IGW_ID" == "None" ]]; then
     --region "$REGION" \
     --query 'InternetGateway.InternetGatewayId' \
     --output text)
-  aws ec2 create-tags --region "$REGION" --resources "$IGW_ID" --tags Key=Name,Value=open-ipass-igw
+  aws ec2 create-tags --region "$REGION" --resources "$IGW_ID" --tags Key=Name,Value=open-ipaas-igw
   aws ec2 attach-internet-gateway --region "$REGION" --internet-gateway-id "$IGW_ID" --vpc-id "$VPC_ID"
 else
   echo "✔ Reusing IGW: $IGW_ID"
 fi
 
-echo "🔍 Checking Route Table 'open-ipass-rt'..."
+echo "🔍 Checking Route Table 'open-ipaas-rt'..."
 RT_ID=$(aws ec2 describe-route-tables \
   --region "$REGION" \
-  --filters "Name=tag:Name,Values=open-ipass-rt" \
+  --filters "Name=tag:Name,Values=open-ipaas-rt" \
   --query 'RouteTables[0].RouteTableId' \
   --output text 2>/dev/null || true)
 
@@ -127,7 +127,7 @@ if [[ -z "$RT_ID" || "$RT_ID" == "None" ]]; then
     --vpc-id "$VPC_ID" \
     --query 'RouteTable.RouteTableId' \
     --output text)
-  aws ec2 create-tags --region "$REGION" --resources "$RT_ID" --tags Key=Name,Value=open-ipass-rt
+  aws ec2 create-tags --region "$REGION" --resources "$RT_ID" --tags Key=Name,Value=open-ipaas-rt
   aws ec2 create-route --region "$REGION" --route-table-id "$RT_ID" --destination-cidr-block 0.0.0.0/0 --gateway-id "$IGW_ID"
   aws ec2 associate-route-table --region "$REGION" --route-table-id "$RT_ID" --subnet-id "$SUBNET_ID"
 else
@@ -137,17 +137,17 @@ fi
 ###############################################################################
 # 4. SECURITY GROUP (REUSE OR CREATE)
 ###############################################################################
-echo "🔍 Checking Security Group 'open-ipass-sg'..."
+echo "🔍 Checking Security Group 'open-ipaas-sg'..."
 SG_ID=$(aws ec2 describe-security-groups \
   --region "$REGION" \
-  --filters "Name=group-name,Values=open-ipass-sg" "Name=vpc-id,Values=$VPC_ID" \
+  --filters "Name=group-name,Values=open-ipaas-sg" "Name=vpc-id,Values=$VPC_ID" \
   --query 'SecurityGroups[0].GroupId' \
   --output text 2>/dev/null || true)
 
 if [[ -z "$SG_ID" || "$SG_ID" == "None" ]]; then
   echo "🧱 Creating Security Group..."
   SG_ID=$(aws ec2 create-security-group \
-    --group-name open-ipass-sg \
+    --group-name open-ipaas-sg \
     --description "Open iPaaS SG" \
     --vpc-id "$VPC_ID" \
     --region "$REGION" \
