@@ -1,122 +1,143 @@
 #!/usr/bin/env bash
 set -e
 
-# --------------------------------------------------------
-# Open iPaaS Minimal Deploy (Only Key Pair Reuse)
-# - No SG reuse
-# - Always creates NEW SG with required ports
-# - Uses DEFAULT VPC + DEFAULT SUBNET
-# - Minimal IAM permissions required
-# --------------------------------------------------------
-
 REGION="ap-northeast-1"
 INSTANCE_TYPE="t3.medium"
 KEY_NAME="ipass-dev-key"
 TAG_NAME="open-ipass-ec2"
-
 USER_DATA_URL="https://raw.githubusercontent.com/Karthiraj1981/open-ipass-oneclick/main/cloud-init.yaml"
 
-echo "🚀 Starting Open iPaaS Deployment (Minimal Mode)"
+echo "🚀 Starting Minimal VPC + EC2 Deploy..."
 echo "🌏 Region: $REGION"
-echo "🔑 Using existing EC2 Key Pair: $KEY_NAME"
+echo "🔑 Using Key Pair: $KEY_NAME"
 echo ""
 
-# --------------------------------------------------------
-# 1. Create NEW Security Group (every run)
-# --------------------------------------------------------
+# --------------------------------------------
+# 1. CREATE MINIMAL VPC
+# --------------------------------------------
+echo "🧱 Creating minimal VPC..."
+VPC_ID=$(aws ec2 create-vpc \
+  --region $REGION \
+  --cidr-block 10.0.0.0/16 \
+  --query 'Vpc.VpcId' \
+  --output text)
 
+aws ec2 modify-vpc-attribute --vpc-id "$VPC_ID" --enable-dns-hostnames "{\"Value\":true}" --region $REGION
+aws ec2 modify-vpc-attribute --vpc-id "$VPC_ID" --enable-dns-support "{\"Value\":true}" --region $REGION
+
+echo "   ✔ VPC: $VPC_ID"
+
+# --------------------------------------------
+# 2. CREATE SUBNET
+# --------------------------------------------
+echo "📡 Creating Subnet..."
+SUBNET_ID=$(aws ec2 create-subnet \
+  --region $REGION \
+  --vpc-id "$VPC_ID" \
+  --cidr-block 10.0.1.0/24 \
+  --availability-zone ap-northeast-1a \
+  --query 'Subnet.SubnetId' \
+  --output text)
+
+aws ec2 modify-subnet-attribute --subnet-id "$SUBNET_ID" --map-public-ip-on-launch --region $REGION
+echo "   ✔ Subnet: $SUBNET_ID"
+
+# --------------------------------------------
+# 3. INTERNET GATEWAY + ROUTE
+# --------------------------------------------
+echo "🌍 Creating Internet Gateway..."
+IGW_ID=$(aws ec2 create-internet-gateway \
+  --region $REGION \
+  --query 'InternetGateway.InternetGatewayId' \
+  --output text)
+
+aws ec2 attach-internet-gateway --internet-gateway-id "$IGW_ID" --vpc-id "$VPC_ID" --region $REGION
+echo "   ✔ IGW: $IGW_ID"
+
+echo "🛣 Creating Route Table..."
+RT_ID=$(aws ec2 create-route-table \
+  --region $REGION \
+  --vpc-id "$VPC_ID" \
+  --query 'RouteTable.RouteTableId' \
+  --output text)
+
+aws ec2 create-route \
+  --region $REGION \
+  --route-table-id "$RT_ID" \
+  --destination-cidr-block 0.0.0.0/0 \
+  --gateway-id "$IGW_ID" >/dev/null
+
+aws ec2 associate-route-table \
+  --region $REGION \
+  --route-table-id "$RT_ID" \
+  --subnet-id "$SUBNET_ID" >/dev/null
+
+echo "   ✔ Route Table: $RT_ID"
+
+# --------------------------------------------
+# 4. CREATE SECURITY GROUP INSIDE NEW VPC
+# --------------------------------------------
+echo "🛡 Creating new SG inside VPC..."
 SG_NAME="ipass-sg-$(date +%s)"
-echo "🛡 Creating NEW Security Group: $SG_NAME"
-
 SG_ID=$(aws ec2 create-security-group \
-  --region "$REGION" \
+  --region $REGION \
   --group-name "$SG_NAME" \
-  --description "Open iPaaS SG (Auto)" \
+  --description "Open iPaaS SG" \
+  --vpc-id "$VPC_ID" \
   --query 'GroupId' \
   --output text)
 
-echo "   ✔ SG ID: $SG_ID"
-echo "🌍 Opening inbound ports..."
+echo "   ✔ SG: $SG_ID"
 
-# Required ports
 REQUIRED_PORTS=(22 8080 8161 61616 9092 2181 10105)
-
 for PORT in "${REQUIRED_PORTS[@]}"; do
   aws ec2 authorize-security-group-ingress \
-    --region "$REGION" \
+    --region $REGION \
     --group-id "$SG_ID" \
     --protocol tcp \
     --port "$PORT" \
     --cidr 0.0.0.0/0 >/dev/null
 done
 
-echo "   ✔ All required ports opened"
+echo "   ✔ All ports opened"
 
+# --------------------------------------------
+# 5. LAUNCH EC2 INSTANCE
+# --------------------------------------------
 
-# --------------------------------------------------------
-# 2. Hardcoded Ubuntu AMI for ap-northeast-1
-# --------------------------------------------------------
+AMI_ID="ami-0f5a7f590cbf5a3dc"  # Ubuntu 22.04 for ap-northeast-1
 
-echo "🖼 Using static Ubuntu 22.04 LTS AMI…"
-AMI_ID="ami-0f5a7f590cbf5a3dc"   # Tokyo region Ubuntu 22.04
-echo "   ✔ AMI: $AMI_ID"
-
-
-# --------------------------------------------------------
-# 3. Launch EC2 (default VPC + public IP auto assigned)
-# --------------------------------------------------------
-
-echo "🚀 Launching EC2 instance..."
-
+echo "🚀 Launching EC2..."
 INSTANCE_ID=$(aws ec2 run-instances \
-  --region "$REGION" \
+  --region $REGION \
   --image-id "$AMI_ID" \
   --instance-type "$INSTANCE_TYPE" \
+  --subnet-id "$SUBNET_ID" \
   --security-group-ids "$SG_ID" \
   --key-name "$KEY_NAME" \
   --associate-public-ip-address \
   --tag-specifications "ResourceType=instance,Tags=[{Key=Name,Value=$TAG_NAME}]" \
-  --user-data "$(curl -fsSL $USER_DATA_URL)" \
-  --query "Instances[0].InstanceId" \
+  --user-data "$(curl -fsSL "$USER_DATA_URL")" \
+  --query 'Instances[0].InstanceId' \
   --output text)
 
-echo "   ✔ EC2 Instance ID: $INSTANCE_ID"
-echo "⏳ Waiting for EC2 to become 'running'..."
-aws ec2 wait instance-running --region "$REGION" --instance-ids "$INSTANCE_ID"
-
-
-# --------------------------------------------------------
-# 4. Fetch Public IP
-# --------------------------------------------------------
+echo "   ✔ Instance: $INSTANCE_ID"
+aws ec2 wait instance-running --region $REGION --instance-ids "$INSTANCE_ID"
 
 PUBLIC_IP=$(aws ec2 describe-instances \
-  --region "$REGION" \
+  --region $REGION \
   --instance-ids "$INSTANCE_ID" \
-  --query "Reservations[0].Instances[0].PublicIpAddress" \
+  --query 'Reservations[0].Instances[0].PublicIpAddress' \
   --output text)
 
-echo ""
 echo "🌍 Public IP: $PUBLIC_IP"
-echo "⏳ Waiting 75 seconds for cloud-init to install services…"
+echo "⏳ Waiting 75 seconds for cloud-init..."
 sleep 75
 
-# --------------------------------------------------------
-# 5. Display Service URLs
-# --------------------------------------------------------
-
-echo ""
-echo "🎉 Deployment Complete! Your Open iPaaS stack is ready."
-echo "--------------------------------------------------------"
-echo "NiFi UI:       http://$PUBLIC_IP:8080"
-echo "Artemis UI:    http://$PUBLIC_IP:8161"
-echo "Artemis JMS:   $PUBLIC_IP:61616"
-echo "Kafka Broker:  PLAINTEXT://$PUBLIC_IP:9092"
-echo "ZooKeeper:     $PUBLIC_IP:2181"
-echo "EventMesh:     http://$PUBLIC_IP:10105"
-echo "--------------------------------------------------------"
-echo "SSH into your instance:"
-echo "   ssh -i ~/.ssh/${KEY_NAME}.pem ubuntu@$PUBLIC_IP"
-echo ""
-echo "Check logs on EC2:"
-echo "   sudo tail -n 200 /var/log/cloud-init-output.log"
-echo "   docker ps -a"
+echo "🎉 Deployment Complete"
+echo "NiFi:        http://$PUBLIC_IP:8080"
+echo "Artemis:     http://$PUBLIC_IP:8161"
+echo "Kafka:       $PUBLIC_IP:9092"
+echo "ZooKeeper:   $PUBLIC_IP:2181"
+echo "EventMesh:   http://$PUBLIC_IP:10105"
+echo "SSH:         ssh -i ~/.ssh/$KEY_NAME.pem ubuntu@$PUBLIC_IP"
