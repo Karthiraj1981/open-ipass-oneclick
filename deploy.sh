@@ -6,7 +6,7 @@ set -euo pipefail
 ###############################################################################
 REGION="ap-northeast-1"
 INSTANCE_TYPE="t3.medium"
-KEY_NAME="ipaas-dev-key"
+KEY_NAME="ipass-dev-key"
 TAG_NAME="open-ipaas-ec2"
 USER_DATA_URL="https://raw.githubusercontent.com/Karthiraj1981/open-ipass-oneclick/main/cloud-init.yaml"
 
