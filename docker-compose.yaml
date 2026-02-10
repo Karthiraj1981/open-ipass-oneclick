@@ -74,7 +74,8 @@ services:
       SINGLE_USER_CREDENTIALS_USERNAME: admin
       SINGLE_USER_CREDENTIALS_PASSWORD: adminadmin
     ports:
-      - "8080:8080"
+      - "9443:9443"      # for HTTPS
+    # - "8080:8080"    # optional; harmless if left, but not used in HTTPS mode
     networks: [ipaas]
     depends_on:
       kafka:
