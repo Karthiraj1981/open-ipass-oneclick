@@ -1,7 +1,7 @@
 version: "3.9"
 
 networks:
-  ipass:
+  ipaas:
     driver: bridge
 
 volumes:
@@ -24,7 +24,7 @@ services:
     ports:
       - "8161:8161"     # Web console
       - "61616:61616"   # AMQP / CORE / OpenWire
-    networks: [ipass]
+    networks: [ipaas]
     volumes:
       - artemis_data:/var/lib/artemis-instance
     healthcheck:
@@ -54,7 +54,7 @@ services:
       KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
       KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
       KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
-    networks: [ipass]
+    networks: [ipaas]
     volumes:
       - kafka_data:/var/lib/kafka
     healthcheck:
@@ -76,7 +76,7 @@ services:
       SINGLE_USER_CREDENTIALS_PASSWORD: adminadmin
     ports:
       - "8080:8080"
-    networks: [ipass]
+    networks: [ipaas]
     depends_on:
       kafka:
         condition: service_healthy
@@ -97,7 +97,7 @@ services:
       - "10000:10000"   # TCP
       - "10205:10205"   # gRPC
       - "10106:10106"   # Admin
-    networks: [ipass]
+    networks: [ipaas]
     depends_on:
       kafka:
         condition: service_healthy
