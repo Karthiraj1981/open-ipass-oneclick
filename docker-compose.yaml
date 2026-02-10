@@ -1,72 +1,29 @@
-version: "3.8"
+version: "3.9"
 
 networks:
   ipass:
     driver: bridge
 
 volumes:
-  zk_data:
-  zk_datalog:
   kafka_data:
   artemis_data:
   nifi_data:
 
 services:
 
-  zookeeper:
-    image: bitnami/zookeeper:3.9
-    container_name: zookeeper
-    restart: unless-stopped
-    environment:
-      - ALLOW_ANONYMOUS_LOGIN=yes
-      - ZOO_4LW_COMMANDS_WHITELIST=ruok,stat
-    ports:
-      - "2181:2181"
-    networks: [ipass]
-    volumes:
-      - zk_data:/bitnami/zookeeper
-      - zk_datalog:/bitnami/zookeeper/logs
-    healthcheck:
-      test: ["CMD", "bash", "-lc", "echo ruok | nc -w 2 127.0.0.1 2181 | grep imok"]
-      interval: 10s
-      timeout: 5s
-      retries: 12
-
-  kafka:
-    image: bitnami/kafka:3.7
-    container_name: kafka
-    restart: unless-stopped
-    depends_on:
-      zookeeper:
-        condition: service_healthy
-    environment:
-      - KAFKA_CFG_ZOOKEEPER_CONNECT=zookeeper:2181
-      - KAFKA_CFG_LISTENERS=PLAINTEXT://:9092
-      - KAFKA_CFG_ADVERTISED_LISTENERS=PLAINTEXT://PUBLIC_IP:9092
-      - KAFKA_CFG_AUTO_CREATE_TOPICS_ENABLE=true
-      - ALLOW_PLAINTEXT_LISTENER=yes
-    ports:
-      - "9092:9092"
-    networks: [ipass]
-    volumes:
-      - kafka_data:/bitnami/kafka
-    healthcheck:
-      test: ["CMD-SHELL", "kafka-topics.sh --bootstrap-server localhost:9092 --list || exit 1"]
-      interval: 15s
-      timeout: 10s
-      retries: 20
-
+  # -------------------------------------------------------
+  # Apache ActiveMQ Artemis (Official Apache image)
+  # -------------------------------------------------------
   artemis:
     image: apache/activemq-artemis:latest
     container_name: artemis
     restart: unless-stopped
     environment:
-      - ARTEMIS_USER=admin
-      - ARTEMIS_PASSWORD=admin
-      - ENABLE_JMX_EXPORTER=false
+      ARTEMIS_USER: admin
+      ARTEMIS_PASSWORD: admin
     ports:
-      - "8161:8161"   # Web console
-      - "61616:61616" # Core/AMQP/OpenWire/HornetQ
+      - "8161:8161"     # Web console
+      - "61616:61616"   # AMQP / CORE / OpenWire
     networks: [ipass]
     volumes:
       - artemis_data:/var/lib/artemis-instance
@@ -76,15 +33,47 @@ services:
       timeout: 10s
       retries: 20
 
+  # -------------------------------------------------------
+  # Apache Kafka (KRaft mode, NO ZooKeeper)
+  # -------------------------------------------------------
+  kafka:
+    image: apache/kafka:3.7.2
+    container_name: kafka
+    restart: unless-stopped
+    ports:
+      - "9092:9092"
+      - "9093:9093"
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://PUBLIC_IP:9092
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+    networks: [ipass]
+    volumes:
+      - kafka_data:/var/lib/kafka
+    healthcheck:
+      test: ["CMD-SHELL", "kafka-topics.sh --bootstrap-server localhost:9092 --list >/dev/null 2>&1 || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 20
+
+  # -------------------------------------------------------
+  # Apache NiFi (Official Apache image)
+  # -------------------------------------------------------
   nifi:
-    image: apache/nifi:1.27.0
+    image: apache/nifi:latest
     container_name: nifi
     restart: unless-stopped
     environment:
-      - NIFI_WEB_HTTP_PORT=8080
-      - SINGLE_USER_CREDENTIALS_USERNAME=admin
-      - SINGLE_USER_CREDENTIALS_PASSWORD=adminadmin
-      # If you later enable HTTPS, switch to NIFI_WEB_HTTPS_HOST/PORT and certs
+      NIFI_WEB_HTTP_PORT: 8080
+      SINGLE_USER_CREDENTIALS_USERNAME: admin
+      SINGLE_USER_CREDENTIALS_PASSWORD: adminadmin
     ports:
       - "8080:8080"
     networks: [ipass]
@@ -96,19 +85,22 @@ services:
     volumes:
       - nifi_data:/opt/nifi/nifi-current
 
+  # -------------------------------------------------------
+  # Apache EventMesh (Official Apache image)
+  # -------------------------------------------------------
   eventmesh:
     image: apache/eventmesh:latest
     container_name: eventmesh
     restart: unless-stopped
+    ports:
+      - "10105:10105"   # HTTP
+      - "10000:10000"   # TCP
+      - "10205:10205"   # gRPC
+      - "10106:10106"   # Admin
+    networks: [ipass]
     depends_on:
       kafka:
         condition: service_healthy
-    ports:
-      - "10105:10105"   # EventMesh HTTP/OpenAPI port (default)
-    networks: [ipass]
-    # For minimal POC we run defaults. For production, mount conf:
-    # volumes:
-    #   - ./eventmesh/conf:/eventmesh/conf
     healthcheck:
       test: ["CMD-SHELL", "curl -fsS http://localhost:10105 || exit 1"]
       interval: 20s
