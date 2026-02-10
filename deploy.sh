@@ -185,6 +185,14 @@ echo "✔ AMI: $AMI_ID"
 # 6. LAUNCH EC2
 ###############################################################################
 echo "🚀 Launching EC2..."
+
+# (Optional but robust) Auto-detect the AMI root device name
+ROOT_DEVICE=$(aws ec2 describe-images \
+  --region "$REGION" \
+  --image-ids "$AMI_ID" \
+  --query 'Images[0].RootDeviceName' \
+  --output text)
+
 INSTANCE_ID=$(aws ec2 run-instances \
   --region "$REGION" \
   --image-id "$AMI_ID" \
@@ -195,6 +203,17 @@ INSTANCE_ID=$(aws ec2 run-instances \
   --associate-public-ip-address \
   --tag-specifications "ResourceType=instance,Tags=[{Key=Name,Value=$TAG_NAME}]" \
   --user-data "$(curl -fsSL "$USER_DATA_URL")" \
+  --block-device-mappings "[
+    {
+      \"DeviceName\": \"${ROOT_DEVICE}\",
+      \"Ebs\": {
+        \"VolumeSize\": 30,
+        \"VolumeType\": \"gp3\",
+        \"DeleteOnTermination\": true,
+        \"Encrypted\": true
+      }
+    }
+  ]" \
   --query 'Instances[0].InstanceId' \
   --output text)
 
