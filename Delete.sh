@@ -9,11 +9,11 @@ echo "--------------------------------------------"
 ###############################################################################
 # 1. TERMINATE EC2 INSTANCE
 ###############################################################################
-echo "🔍 Checking for EC2 instance tagged 'open-ipass-ec2'..."
+echo "🔍 Checking for EC2 instance tagged 'open-ipaas-ec2'..."
 
 INSTANCE_ID=$(aws ec2 describe-instances \
   --region "$REGION" \
-  --filters "Name=tag:Name,Values=open-ipass-ec2" "Name=instance-state-name,Values=running,stopped,stopping" \
+  --filters "Name=tag:Name,Values=open-ipaas-ec2" "Name=instance-state-name,Values=running,stopped,stopping" \
   --query "Reservations[].Instances[].InstanceId" \
   --output text)
 
@@ -30,10 +30,10 @@ fi
 ###############################################################################
 # 2. DELETE SECURITY GROUP
 ###############################################################################
-echo "🔍 Checking Security Group 'open-ipass-sg'..."
+echo "🔍 Checking Security Group 'open-ipaas-sg'..."
 SG_ID=$(aws ec2 describe-security-groups \
   --region "$REGION" \
-  --filters "Name=group-name,Values=open-ipass-sg" \
+  --filters "Name=group-name,Values=open-ipaas-sg" \
   --query "SecurityGroups[0].GroupId" \
   --output text 2>/dev/null || true)
 
@@ -64,10 +64,10 @@ fi
 ###############################################################################
 # 3. GET VPC ID
 ###############################################################################
-echo "🔍 Checking VPC 'open-ipass-vpc'..."
+echo "🔍 Checking VPC 'open-ipaas-vpc'..."
 VPC_ID=$(aws ec2 describe-vpcs \
   --region "$REGION" \
-  --filters "Name=tag:Name,Values=open-ipass-vpc" \
+  --filters "Name=tag:Name,Values=open-ipaas-vpc" \
   --query "Vpcs[0].VpcId" \
   --output text 2>/dev/null || true)
 
@@ -82,7 +82,7 @@ echo "✔ Found VPC: $VPC_ID"
 ###############################################################################
 # 4. ROUTE TABLES
 ###############################################################################
-echo "🔍 Checking Route Table 'open-ipass-rt'..."
+echo "🔍 Checking Route Table 'open-ipaas-rt'..."
 RT_ID=$(aws ec2 describe-route-tables \
   --region "$REGION" \
   --filters "Name=tag:Name,Values=open-ipass-rt" \
@@ -116,10 +116,10 @@ fi
 ###############################################################################
 # 5. DELETE SUBNET
 ###############################################################################
-echo "🔍 Checking Subnet 'open-ipass-subnet'..."
+echo "🔍 Checking Subnet 'open-ipaas-subnet'..."
 SUBNET_ID=$(aws ec2 describe-subnets \
   --region "$REGION" \
-  --filters "Name=tag:Name,Values=open-ipass-subnet" \
+  --filters "Name=tag:Name,Values=open-ipaas-subnet" \
   --query "Subnets[0].SubnetId" \
   --output text 2>/dev/null || true)
 
@@ -135,10 +135,10 @@ fi
 ###############################################################################
 # 6. DELETE INTERNET GATEWAY
 ###############################################################################
-echo "🔍 Checking IGW 'open-ipass-igw'..."
+echo "🔍 Checking IGW 'open-ipaas-igw'..."
 IGW_ID=$(aws ec2 describe-internet-gateways \
   --region "$REGION" \
-  --filters "Name=tag:Name,Values=open-ipass-igw" \
+  --filters "Name=tag:Name,Values=open-ipaas-igw" \
   --query "InternetGateways[0].InternetGatewayId" \
   --output text 2>/dev/null || true)
 
