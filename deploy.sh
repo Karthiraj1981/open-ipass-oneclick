@@ -1,238 +1,169 @@
 #!/usr/bin/env bash
-set -euo pipefail
+set -Eeuo pipefail
 
-###############################################################################
-# SETTINGS
-###############################################################################
-REGION="ap-northeast-1"
-INSTANCE_TYPE="t3.medium"
-KEY_NAME="ipass-dev-key"
-TAG_NAME="open-ipaas-ec2"
-USER_DATA_URL="https://raw.githubusercontent.com/Karthiraj1981/open-ipass-oneclick/main/cloud-init.yaml"
+# ===== Config (adjust if needed) =====
+REGION="${REGION:-ap-northeast-1}"
+INSTANCE_TYPE="${INSTANCE_TYPE:-t3.medium}"
+KEY_NAME="${KEY_NAME:-ipass-dev-key}"
+TAG_NAME="${TAG_NAME:-open-ipaas-ec2}"
+USER_DATA_URL="${USER_DATA_URL:-https://raw.githubusercontent.com/Karthiraj1981/open-ipass-oneclick/main/cloud-init.yaml}"
 
-echo "🌍 Region: $REGION"
-KEY_PATH="$HOME/.ssh/${KEY_NAME}.pem"
+NAME_PREFIX="open-ipaas"
+VPC_CIDR="10.0.0.0/16"
+SUBNET_CIDR="10.0.1.0/24"
+SSH_CIDR="${SSH_CIDR:-0.0.0.0/0}"           # tighten to your IP/CIDR when you’re done testing
+EXTRA_PORTS=("22" "8080" "8161" "61616" "9092" "10105" "10000" "10205")
 
-###############################################################################
-# 0. KEY PAIR
-###############################################################################
-echo "🔑 Checking EC2 key pair '$KEY_NAME'..."
-EXISTING_KEY=$(aws ec2 describe-key-pairs \
-  --region "$REGION" \
-  --key-names "$KEY_NAME" \
-  --query 'KeyPairs[0].KeyName' \
-  --output text 2>/dev/null || true)
+log(){ echo "[$(date +'%F %T%z')] $*"; }
+trap 'log "❌ Error on line $LINENO"; exit 1' ERR
 
-if [[ -z "$EXISTING_KEY" || "$EXISTING_KEY" == "None" ]]; then
-  echo "🆕 Creating EC2 key..."
-  mkdir -p "$HOME/.ssh"
-  aws ec2 create-key-pair \
-    --region "$REGION" \
-    --key-name "$KEY_NAME" \
-    --query 'KeyMaterial' \
-    --output text > "$KEY_PATH"
-  chmod 400 "$KEY_PATH"
+# ----- Helpers -----
+get_vpc(){ aws ec2 describe-vpcs --region "$REGION" --filters "Name=tag:Name,Values=${NAME_PREFIX}-vpc" --query "Vpcs[0].VpcId" --output text 2>/dev/null || true; }
+get_subnet(){ aws ec2 describe-subnets --region "$REGION" --filters "Name=tag:Name,Values=${NAME_PREFIX}-subnet" --query "Subnets[0].SubnetId" --output text 2>/dev/null || true; }
+get_rtb(){ aws ec2 describe-route-tables --region "$REGION" --filters "Name=tag:Name,Values=${NAME_PREFIX}-rt" --query "RouteTables[0].RouteTableId" --output text 2>/dev/null || true; }
+get_igw_attached(){ local vpc_id="$1"; aws ec2 describe-internet-gateways --region "$REGION" --filters "Name=attachment.vpc-id,Values=${vpc_id}" --query "InternetGateways[0].InternetGatewayId" --output text 2>/dev/null || true; }
+get_key(){ aws ec2 describe-key-pairs --region "$REGION" --key-names "$KEY_NAME" --query "KeyPairs[0].KeyName" --output text 2>/dev/null || true; }
+
+# ----- VPC -----
+vpc_id="$(get_vpc)"
+if [[ -z "$vpc_id" || "$vpc_id" == "None" ]]; then
+  log "🆕 Creating VPC $VPC_CIDR"
+  vpc_id=$(aws ec2 create-vpc --region "$REGION" --cidr-block "$VPC_CIDR" --query "Vpc.VpcId" --output text)
+  aws ec2 create-tags --region "$REGION" --resources "$vpc_id" --tags Key=Name,Value="${NAME_PREFIX}-vpc"
 else
-  echo "✔ Key already exists"
-  if [[ ! -f "$KEY_PATH" ]]; then
-    echo "❌ Local PEM missing — recreate or rename KEY_NAME"
-    exit 1
-  fi
+  log "♻️ Reusing VPC: $vpc_id"
+fi
+aws ec2 modify-vpc-attribute --region "$REGION" --vpc-id "$vpc_id" --enable-dns-support
+aws ec2 modify-vpc-attribute --region "$REGION" --vpc-id "$vpc_id" --enable-dns-hostnames
+
+# ----- Subnet (pick first available AZ robustly) -----
+subnet_id="$(get_subnet)"
+if [[ -z "$subnet_id" || "$subnet_id" == "None" ]]; then
+  az=$(aws ec2 describe-availability-zones --region "$REGION" --query "AvailabilityZones[?State=='available']|[0].ZoneName" --output text)
+  log "🆕 Creating Subnet $SUBNET_CIDR in $az"
+  subnet_id=$(aws ec2 create-subnet --region "$REGION" --vpc-id "$vpc_id" --cidr-block "$SUBNET_CIDR" --availability-zone "$az" --query "Subnet.SubnetId" --output text)
+  aws ec2 create-tags --region "$REGION" --resources "$subnet_id" --tags Key=Name,Value="${NAME_PREFIX}-subnet"
+else
+  log "♻️ Reusing Subnet: $subnet_id"
+fi
+aws ec2 modify-subnet-attribute --region "$REGION" --subnet-id "$subnet_id" --map-public-ip-on-launch
+
+# ----- IGW (ensure ATTACHED to this VPC) -----
+igw_attached="$(get_igw_attached "$vpc_id")"
+if [[ -z "$igw_attached" || "$igw_attached" == "None" ]]; then
+  log "🆕 Creating & attaching IGW"
+  igw_id=$(aws ec2 create-internet-gateway --region "$REGION" --query "InternetGateway.InternetGatewayId" --output text)
+  aws ec2 create-tags --region "$REGION" --resources "$igw_id" --tags Key=Name,Value="${NAME_PREFIX}-igw"
+  aws ec2 attach-internet-gateway --region "$REGION" --internet-gateway-id "$igw_id" --vpc-id "$vpc_id"
+  sleep 2
+else
+  igw_id="$igw_attached"
+  log "✅ IGW attached to VPC: $igw_id"
 fi
 
-###############################################################################
-# 1. VPC
-###############################################################################
-echo "🔍 Checking VPC open-ipaas-vpc..."
-VPC_ID=$(aws ec2 describe-vpcs \
-  --region "$REGION" \
-  --filters "Name=tag:Name,Values=open-ipaas-vpc" \
-  --query 'Vpcs[0].VpcId' \
-  --output text 2>/dev/null || true)
-
-if [[ -z "$VPC_ID" || "$VPC_ID" == "None" ]]; then
-  echo "🧱 Creating VPC..."
-  VPC_ID=$(aws ec2 create-vpc \
-    --region "$REGION" \
-    --cidr-block 10.0.0.0/16 \
-    --query 'Vpc.VpcId' \
-    --output text)
-  aws ec2 create-tags --region "$REGION" --resources "$VPC_ID" --tags Key=Name,Value=open-ipaas-vpc
+# ----- Route table (ensure default route ACTIVE and association) -----
+rtb_id="$(get_rtb)"
+if [[ -z "$rtb_id" || "$rtb_id" == "None" ]]; then
+  log "🆕 Creating Route Table"
+  rtb_id=$(aws ec2 create-route-table --region "$REGION" --vpc-id "$vpc_id" --query "RouteTable.RouteTableId" --output text)
+  aws ec2 create-tags --region "$REGION" --resources "$rtb_id" --tags Key=Name,Value="${NAME_PREFIX}-rt"
 else
-  echo "✔ Reusing VPC: $VPC_ID"
+  log "♻️ Reusing Route Table: $rtb_id"
 fi
 
-aws ec2 modify-vpc-attribute --region "$REGION" --vpc-id "$VPC_ID" --enable-dns-support "{\"Value\":true}"
-aws ec2 modify-vpc-attribute --region "$REGION" --vpc-id "$VPC_ID" --enable-dns-hostnames "{\"Value\":true}"
-
-###############################################################################
-# 2. SUBNET
-###############################################################################
-echo "🔍 Checking Subnet open-ipaas-subnet..."
-SUBNET_ID=$(aws ec2 describe-subnets \
-  --region "$REGION" \
-  --filters "Name=tag:Name,Values=open-ipaas-subnet" \
-  --query 'Subnets[0].SubnetId' \
-  --output text 2>/dev/null || true)
-
-if [[ -z "$SUBNET_ID" || "$SUBNET_ID" == "None" ]]; then
-  echo "📡 Creating Subnet..."
-  SUBNET_ID=$(aws ec2 create-subnet \
-    --region "$REGION" \
-    --vpc-id "$VPC_ID" \
-    --cidr-block 10.0.1.0/24 \
-    --availability-zone "${REGION}a" \
-    --query 'Subnet.SubnetId' \
-    --output text)
-  aws ec2 create-tags --region "$REGION" --resources "$SUBNET_ID" --tags Key=Name,Value=open-ipaas-subnet
+# Ensure default route exists and is active (recreate if blackhole)
+route_state=$(aws ec2 describe-route-tables --region "$REGION" --route-table-ids "$rtb_id" \
+               --query "RouteTables[0].Routes[?DestinationCidrBlock=='0.0.0.0/0']|[0].State" --output text 2>/dev/null || true)
+if [[ -z "$route_state" || "$route_state" == "None" ]]; then
+  log "➕ Adding default route 0.0.0.0/0 → $igw_id"
+  aws ec2 create-route --region "$REGION" --route-table-id "$rtb_id" --destination-cidr-block 0.0.0.0/0 --gateway-id "$igw_id" >/dev/null
+elif [[ "$route_state" == "blackhole" ]]; then
+  log "🧹 Found blackhole route — recreating"
+  aws ec2 delete-route --region "$REGION" --route-table-id "$rtb_id" --destination-cidr-block 0.0.0.0/0 || true
+  aws ec2 create-route --region "$REGION" --route-table-id "$rtb_id" --destination-cidr-block 0.0.0.0/0 --gateway-id "$igw_id" >/dev/null
 else
-  echo "✔ Reusing Subnet: $SUBNET_ID"
+  log "✅ Default route ACTIVE"
 fi
 
-aws ec2 modify-subnet-attribute --region "$REGION" --subnet-id "$SUBNET_ID" --map-public-ip-on-launch
+# Associate/replace association for this subnet to this RTB
+assoc_id=$(aws ec2 describe-route-tables --region "$REGION" --filters "Name=association.subnet-id,Values=${subnet_id}" \
+            --query "RouteTables[0].Associations[?SubnetId=='${subnet_id}']|[0].RouteTableAssociationId" --output text 2>/dev/null || true)
+current_rtb=$(aws ec2 describe-route-tables --region "$REGION" --filters "Name=association.subnet-id,Values=${subnet_id}" \
+             --query "RouteTables[0].Associations[?SubnetId=='${subnet_id}']|[0].RouteTableId" --output text 2>/dev/null || true)
 
-###############################################################################
-# 3. IGW + ROUTE TABLE
-###############################################################################
-echo "🔍 Checking IGW open-ipaas-igw..."
-IGW_ID=$(aws ec2 describe-internet-gateways \
-  --region "$REGION" \
-  --filters "Name=tag:Name,Values=open-ipaas-igw" \
-  --query 'InternetGateways[0].InternetGatewayId' \
-  --output text 2>/dev/null || true)
-
-if [[ -z "$IGW_ID" || "$IGW_ID" == "None" ]]; then
-  echo "🌐 Creating IGW..."
-  IGW_ID=$(aws ec2 create-internet-gateway \
-    --region "$REGION" \
-    --query 'InternetGateway.InternetGatewayId' \
-    --output text)
-  aws ec2 create-tags --region "$REGION" --resources "$IGW_ID" --tags Key=Name,Value=open-ipaas-igw
-  aws ec2 attach-internet-gateway --region "$REGION" --internet-gateway-id "$IGW_ID" --vpc-id "$VPC_ID"
+if [[ -n "$assoc_id" && "$assoc_id" != "None" && -n "$current_rtb" && "$current_rtb" != "$rtb_id" ]]; then
+  log "🔁 Replacing subnet association from $current_rtb → $rtb_id"
+  aws ec2 replace-route-table-association --region "$REGION" --association-id "$assoc_id" --route-table-id "$rtb_id" >/dev/null
+elif [[ -z "$assoc_id" || "$assoc_id" == "None" ]]; then
+  log "🔗 Associating RTB $rtb_id → Subnet $subnet_id"
+  aws ec2 associate-route-table --region "$REGION" --route-table-id "$rtb_id" --subnet-id "$subnet_id" >/dev/null
 else
-  echo "✔ Reusing IGW: $IGW_ID"
+  log "✅ Subnet already associated to RTB $rtb_id"
 fi
 
-echo "🔍 Checking Route Table open-ipaas-rt..."
-RT_ID=$(aws ec2 describe-route-tables \
-  --region "$REGION" \
-  --filters "Name=tag:Name,Values=open-ipaas-rt" \
-  --query 'RouteTables[0].RouteTableId' \
-  --output text 2>/dev/null || true)
-
-if [[ -z "$RT_ID" || "$RT_ID" == "None" ]]; then
-  echo "🛣 Creating Route Table..."
-  RT_ID=$(aws ec2 create-route-table \
-    --region "$REGION" \
-    --vpc-id "$VPC_ID" \
-    --query 'RouteTable.RouteTableId' \
-    --output text)
-  aws ec2 create-tags --region "$REGION" --resources "$RT_ID" --tags Key=Name,Value=open-ipaas-rt
-  aws ec2 create-route --region "$REGION" --route-table-id "$RT_ID" --destination-cidr-block 0.0.0.0/0 --gateway-id "$IGW_ID"
-  aws ec2 associate-route-table --region "$REGION" --route-table-id "$RT_ID" --subnet-id "$SUBNET_ID"
+# ----- Security group -----
+sg_id=$(aws ec2 describe-security-groups --region "$REGION" \
+         --filters "Name=group-name,Values=${NAME_PREFIX}-sg" "Name=vpc-id,Values=${vpc_id}" \
+         --query "SecurityGroups[0].GroupId" --output text 2>/dev/null || true)
+if [[ -z "$sg_id" || "$sg_id" == "None" ]]; then
+  log "🆕 Creating Security Group"
+  sg_id=$(aws ec2 create-security-group --region "$REGION" --vpc-id "$vpc_id" --group-name "${NAME_PREFIX}-sg" --description "Open iPaaS SG" --query "GroupId" --output text)
+  aws ec2 create-tags --region "$REGION" --resources "$sg_id" --tags Key=Name,Value="${NAME_PREFIX}-sg"
 else
-  echo "✔ Reusing Route Table: $RT_ID"
+  log "♻️ Reusing Security Group: $sg_id"
 fi
-
-###############################################################################
-# 4. SECURITY GROUP (FIXED)
-###############################################################################
-echo "🔍 Checking Security Group open-ipaas-sg..."
-SG_ID=$(aws ec2 describe-security-groups \
-  --region "$REGION" \
-  --filters "Name=group-name,Values=open-ipaas-sg" "Name=vpc-id,Values=${VPC_ID}" \
-  --query 'SecurityGroups[0].GroupId' \
-  --output text 2>/dev/null || true)
-
-if [[ -z "$SG_ID" || "$SG_ID" == "None" ]]; then
-  echo "🧱 Creating Security Group..."
-  SG_ID=$(aws ec2 create-security-group \
-    --region "$REGION" \
-    --vpc-id "$VPC_ID" \
-    --group-name open-ipaas-sg \
-    --description "Open iPaaS SG" \
-    --query 'GroupId' \
-    --output text)
-  echo "✔ SG created: $SG_ID"
-else
-  echo "✔ Reusing Security Group: $SG_ID"
-fi
-
-echo "🔧 Ensuring ingress rules exist..."
-for PORT in 22 8080 8161 61616 9092 10105 10000 10205; do
-  aws ec2 authorize-security-group-ingress \
-    --region "$REGION" \
-    --group-id "$SG_ID" \
-    --protocol tcp \
-    --port "$PORT" \
-    --cidr 0.0.0.0/0 2>/dev/null || true
+for PORT in "${EXTRA_PORTS[@]}"; do
+  aws ec2 authorize-security-group-ingress --region "$REGION" --group-id "$sg_id" --protocol tcp --port "$PORT" --cidr "$SSH_CIDR" >/dev/null 2>&1 || true
 done
 
-###############################################################################
-# 5. AMI
-###############################################################################
-echo "🔍 Finding latest Ubuntu 22.04 AMI..."
-AMI_ID=$(aws ec2 describe-images \
-  --region "$REGION" \
-  --owners 099720109477 \
-  --filters "Name=name,Values=ubuntu/images/hvm-ssd/ubuntu-jammy-22.04-amd64-server-*" \
-  --query "Images | sort_by(@,&CreationDate)[-1].ImageId" \
-  --output text)
+# ----- Key pair (reuse or create) -----
+if [[ "$(get_key)" == "$KEY_NAME" ]]; then
+  log "♻️ Reusing Key Pair: $KEY_NAME"
+else
+  log "🆕 Creating Key Pair: $KEY_NAME"
+  mkdir -p "$HOME/.ssh"
+  aws ec2 create-key-pair --region "$REGION" --key-name "$KEY_NAME" --key-type rsa --key-format pem --query "KeyMaterial" --output text > "$HOME/.ssh/${KEY_NAME}.pem"
+  chmod 400 "$HOME/.ssh/${KEY_NAME}.pem"
+fi
 
-echo "✔ AMI: $AMI_ID"
+# ----- AMI -----
+log "🔎 Finding latest Ubuntu 22.04 LTS"
+AMI_ID=$(aws ec2 describe-images --region "$REGION" --owners 099720109477 \
+  --filters "Name=name,Values=ubuntu/images/hvm-ssd/ubuntu-jammy-22.04-amd64-server-*" "Name=architecture,Values=x86_64" \
+  --query "sort_by(Images,&CreationDate)[-1].ImageId" --output text)
+ROOT_DEVICE=$(aws ec2 describe-images --region "$REGION" --image-ids "$AMI_ID" --query "Images[0].RootDeviceName" --output text)
 
-###############################################################################
-# 6. LAUNCH EC2
-###############################################################################
-echo "🚀 Launching EC2..."
+# ----- Launch EC2 -----
+log "🚀 Launching EC2..."
+user_data_arg=()
+if [[ -n "$USER_DATA_URL" ]]; then
+  user_data_arg=( --user-data "$(curl -fsSL "$USER_DATA_URL")" )
+fi
 
-# (Optional but robust) Auto-detect the AMI root device name
-ROOT_DEVICE=$(aws ec2 describe-images \
-  --region "$REGION" \
-  --image-ids "$AMI_ID" \
-  --query 'Images[0].RootDeviceName' \
-  --output text)
-
-INSTANCE_ID=$(aws ec2 run-instances \
-  --region "$REGION" \
-  --image-id "$AMI_ID" \
-  --instance-type "$INSTANCE_TYPE" \
-  --subnet-id "$SUBNET_ID" \
-  --security-group-ids "$SG_ID" \
-  --key-name "$KEY_NAME" \
-  --associate-public-ip-address \
-  --tag-specifications "ResourceType=instance,Tags=[{Key=Name,Value=$TAG_NAME}]" \
-  --user-data "$(curl -fsSL "$USER_DATA_URL")" \
+INSTANCE_ID=$(aws ec2 run-instances --region "$REGION" \
+  --image-id "$AMI_ID" --instance-type "$INSTANCE_TYPE" \
+  --subnet-id "$subnet_id" --security-group-ids "$sg_id" \
+  --key-name "$KEY_NAME" --associate-public-ip-address \
+  --tag-specifications "ResourceType=instance,Tags=[{Key=Name,Value=${TAG_NAME}}]" \
+  "${user_data_arg[@]}" \
   --block-device-mappings "[
-    {
-      \"DeviceName\": \"${ROOT_DEVICE}\",
-      \"Ebs\": {
-        \"VolumeSize\": 30,
-        \"VolumeType\": \"gp3\",
-        \"DeleteOnTermination\": true,
-        \"Encrypted\": true
-      }
+    { \"DeviceName\": \"${ROOT_DEVICE}\",
+      \"Ebs\": {\"VolumeSize\": 30, \"VolumeType\": \"gp3\", \"DeleteOnTermination\": true, \"Encrypted\": true}
     }
   ]" \
-  --query 'Instances[0].InstanceId' \
-  --output text)
+  --query 'Instances[0].InstanceId' --output text)
 
-echo "⏳ Waiting for EC2..."
+log "⏳ Waiting for running + 2/2 checks..."
 aws ec2 wait instance-running --region "$REGION" --instance-ids "$INSTANCE_ID"
+aws ec2 wait instance-status-ok --region "$REGION" --instance-ids "$INSTANCE_ID"
 
-PUBLIC_IP=$(aws ec2 describe-instances \
-  --region "$REGION" \
-  --instance-ids "$INSTANCE_ID" \
-  --query 'Reservations[0].Instances[0].PublicIpAddress' \
-  --output text)
-
-echo "🌐 Public IP: $PUBLIC_IP"
-echo "⏳ Waiting for cloud-init (75s)..."
-sleep 75
+PUBLIC_IP=$(aws ec2 describe-instances --region "$REGION" --instance-ids "$INSTANCE_ID" --query 'Reservations[0].Instances[0].PublicIpAddress' --output text)
+log "🌐 Public IP: $PUBLIC_IP"
+log "⏳ Waiting for cloud-init (75s)..."; sleep 75
 
 echo "🎉 Deployment Complete!"
-echo "NiFi:        http://$PUBLIC_IP:8080"
-echo "Artemis:     http://$PUBLIC_IP:8161"
-echo "Kafka:       $PUBLIC_IP:9092"
-echo "EventMesh:   http://$PUBLIC_IP:10105"
-echo "SSH:         ssh -i $KEY_PATH ubuntu@$PUBLIC_IP"
+echo "NiFi:      http://$PUBLIC_IP:8080"
+echo "Artemis:   http://$PUBLIC_IP:8161"
+echo "Kafka:     $PUBLIC_IP:9092"
+echo "EventMesh: http://$PUBLIC_IP:10105"
+echo "SSH:       ssh -i ~/.ssh/${KEY_NAME}.pem ubuntu@$PUBLIC_IP"
