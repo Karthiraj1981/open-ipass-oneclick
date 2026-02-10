@@ -105,7 +105,7 @@ echo "   ✔ All ports opened"
 # 5. LAUNCH EC2 INSTANCE
 # --------------------------------------------
 
-AMI_ID="ami-0f5a7f590cbf5a3dc"  # Ubuntu 22.04 for ap-northeast-1
+AMI_ID="ami-0d49f1fe982e06148"  # Ubuntu 22.04 for ap-northeast-1
 
 echo "🚀 Launching EC2..."
 INSTANCE_ID=$(aws ec2 run-instances \
