@@ -89,7 +89,7 @@ SG_ID=$(aws ec2 create-security-group \
 
 echo "   ✔ SG: $SG_ID"
 
-REQUIRED_PORTS=(22 8080 8161 61616 9092 2181 10105)
+REQUIRED_PORTS=(22 8080 8161 61616 9092 10105)
 for PORT in "${REQUIRED_PORTS[@]}"; do
   aws ec2 authorize-security-group-ingress \
     --region $REGION \
@@ -138,6 +138,5 @@ echo "🎉 Deployment Complete"
 echo "NiFi:        http://$PUBLIC_IP:8080"
 echo "Artemis:     http://$PUBLIC_IP:8161"
 echo "Kafka:       $PUBLIC_IP:9092"
-echo "ZooKeeper:   $PUBLIC_IP:2181"
 echo "EventMesh:   http://$PUBLIC_IP:10105"
 echo "SSH:         ssh -i ~/.ssh/$KEY_NAME.pem ubuntu@$PUBLIC_IP"
