@@ -1,6 +1,6 @@
 #cloud-config
 package_update: true
-package_upgrade: all
+package_upgrade: true
 
 packages:
   - docker.io
@@ -14,51 +14,49 @@ write_files:
     permissions: '0755'
     content: |
       #!/bin/bash
-      set -e
+      set -euo pipefail
 
       LOG_FILE="/var/log/ipaas-init.log"
-      echo "===== Starting iPaaS cloud-init =====" | tee -a $LOG_FILE
+      echo "===== Starting iPaaS cloud-init =====" | tee -a "$LOG_FILE"
 
       # Ensure docker service is running
-      systemctl enable docker >> $LOG_FILE 2>&1
-      systemctl start docker  >> $LOG_FILE 2>&1
+      systemctl enable docker      >> "$LOG_FILE" 2>&1
+      systemctl start docker       >> "$LOG_FILE" 2>&1
+      systemctl is-active docker   >> "$LOG_FILE" 2>&1
 
       mkdir -p /opt/ipaas
       cd /opt/ipaas
 
-      echo "[1] Fetching docker-compose.yaml from GitHub..." | tee -a $LOG_FILE
+      echo "[1] Fetching docker-compose.yaml from GitHub..." | tee -a "$LOG_FILE"
       curl -fsSL https://raw.githubusercontent.com/Karthiraj1981/open-ipass-oneclick/main/docker-compose.yaml \
         -o docker-compose.yaml
 
       if [[ ! -f docker-compose.yaml ]]; then
-        echo "ERROR: Failed to download docker-compose.yaml" | tee -a $LOG_FILE
+        echo "ERROR: Failed to download docker-compose.yaml" | tee -a "$LOG_FILE"
         exit 1
       fi
 
-      echo "[2] Detecting PUBLIC IP..." | tee -a $LOG_FILE
-      PUBLIC_IP=$(curl -s http://169.254.169.254/latest/meta-data/public-ipv4)
-
-      if [[ -z "$PUBLIC_IP" ]]; then
-        echo "ERROR: Could not detect public IP!" | tee -a $LOG_FILE
+      echo "[2] Detecting PUBLIC IP..." | tee -a "$LOG_FILE"
+      PUBLIC_IP="$(curl -s http://169.254.169.254/latest/meta-data/public-ipv4 || true)"
+      if [[ -z "${PUBLIC_IP:-}" ]]; then
+        echo "ERROR: Could not detect public IP!" | tee -a "$LOG_FILE"
         exit 1
       fi
-
-      echo "   → Public IP = $PUBLIC_IP" | tee -a $LOG_FILE
+      echo " → Public IP = $PUBLIC_IP" | tee -a "$LOG_FILE"
 
       # Replace PUBLIC_IP placeholder
-      sed -i "s/PUBLIC_IP/$PUBLIC_IP/g" docker-compose.yaml
+      sed -i "s/PUBLIC_IP/${PUBLIC_IP}/g" docker-compose.yaml
 
-      echo "[3] Cleaning up old containers..." | tee -a $LOG_FILE
-      docker compose down --remove-orphans >> $LOG_FILE 2>&1 || true
+      echo "[3] Cleaning up old containers..." | tee -a "$LOG_FILE"
+      docker compose down --remove-orphans >> "$LOG_FILE" 2>&1 || true
 
-      echo "[4] Pulling images..." | tee -a $LOG_FILE
-      docker compose pull >> $LOG_FILE 2>&1
+      echo "[4] Pulling images..." | tee -a "$LOG_FILE"
+      docker compose pull >> "$LOG_FILE" 2>&1
 
-      echo "[5] Starting Apache iPaaS stack..." | tee -a $LOG_FILE
-      docker compose up -d >> $LOG_FILE 2>&1
+      echo "[5] Starting Apache iPaaS stack..." | tee -a "$LOG_FILE"
+      docker compose up -d >> "$LOG_FILE" 2>&1
 
-      echo "===== Done iPaaS cloud-init =====" | tee -a $LOG_FILE
-
+      echo "===== Done iPaaS cloud-init =====" | tee -a "$LOG_FILE"
 
 runcmd:
   - [ bash, /opt/ipaas/init.sh ]
