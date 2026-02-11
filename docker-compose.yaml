@@ -17,17 +17,30 @@ services:
     image: apache/activemq-artemis:latest   # consider pinning a version
     container_name: artemis
     restart: unless-stopped
+
     environment:
+      # ---- First-boot admin bootstrap (applied when the volume is empty) ----
       ARTEMIS_USER: admin
-      ARTEMIS_PASSWORD: admin
+      ARTEMIS_PASSWORD: adminadminadmin
+      ARTEMIS_ROLE: admin
+      # Optional: non-interactive auto-create, if image supports it
+      # ANONYMOUS_LOGIN: "false"
     ports:
-      - "8161:8161"   # Web console
-      - "61616:61616" # AMQP / CORE / OpenWire
+      - "8161:8161"     # Web console
+      - "61616:61616"   # CORE / AMQP / OpenWire / MQTT / STOMP multiplexed
+      - "5445:5445"     # HORNETQ/STOMP
+      - "5672:5672"     # AMQP
+      - "1883:1883"     # MQTT
+      - "61613:61613"   # ST
+
     networks: [ipaas]
     volumes:
       - artemis_data:/var/lib/artemis-instance
+
     healthcheck:
-      test: ["CMD-SHELL", "curl -fsS http://localhost:8161 || exit 1"]
+      # Web console readiness (HTTP 200 OK on Jolokia version)
+      # Uses a session-less HEAD first; if your image requires form login, use the TCP port check below instead.
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8161/console/jolokia/version >/dev/null 2>&1 || exit 1"]
       interval: 20s
       timeout: 10s
       retries: 20
