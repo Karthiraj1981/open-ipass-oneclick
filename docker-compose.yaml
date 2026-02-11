@@ -19,6 +19,10 @@ services:
     restart: unless-stopped
 
     environment:
+   
+      # Keep your existing envs…
+      JAVA_TOOL_OPTIONS: "-Dhawtio.http.strictTransportSecurity="
+
       # ---- First-boot admin bootstrap (applied when the volume is empty) ----
       ARTEMIS_USER: admin
       ARTEMIS_PASSWORD: adminadminadmin
