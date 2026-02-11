@@ -74,7 +74,7 @@ services:
       SINGLE_USER_CREDENTIALS_USERNAME: admin
       SINGLE_USER_CREDENTIALS_PASSWORD: adminadmin
     ports:
-      - "9443:9443"      # for HTTPS
+      - "9443:8443"      # # host:container  → expose HTTPS externally on 9443
     # - "8080:8080"    # optional; harmless if left, but not used in HTTPS mode
     networks: [ipaas]
     depends_on:
